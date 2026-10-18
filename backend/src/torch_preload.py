@@ -55,6 +55,13 @@ def preload_rocm_torch() -> None:
         # free VRAM, with no measurable speed difference.
         os.environ.setdefault("GPU_RESOURCE_CACHE_SIZE", "64")
 
+        # spandrel-rocm compiles its HIP kernels once and keeps them here.
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            os.environ.setdefault(
+                "SPANDREL_HIP_CACHE_DIR", str(Path(appdata) / "chaiNNer" / "hip_cache")
+            )
+
         _setup_miopen_cache()
 
         import torch  # noqa: F401

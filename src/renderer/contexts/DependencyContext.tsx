@@ -53,7 +53,7 @@ import {
 } from '../../common/common-types';
 import { log } from '../../common/log';
 import { EMPTY_ARRAY, isNotNullish, joinEnglish, noop } from '../../common/util';
-import { versionGt } from '../../common/version';
+import { isDependencyOutdated } from '../../common/version';
 import { Markdown } from '../components/Markdown';
 import {
     useBackendEventSourceListener,
@@ -125,7 +125,7 @@ const PackageDependencyView = memo(
         let tagText = t('dependencyManager.missing', 'Missing');
         let versionString: string = pkg.version;
         if (installedVersion) {
-            const outdated = versionGt(pkg.version, installedVersion);
+            const outdated = isDependencyOutdated(pkg.version, installedVersion);
             if (outdated) {
                 color = 'yellow.500';
                 tagText = t('dependencyManager.outdated', 'Outdated');
@@ -177,7 +177,7 @@ class PackageUpdateInfo {
             const installed = installedPyPi[dep.pypiName];
             if (!installed) {
                 missing.push(dep);
-            } else if (versionGt(dep.version, installed)) {
+            } else if (isDependencyOutdated(dep.version, installed)) {
                 outdated.push(dep);
             }
         }
@@ -994,7 +994,7 @@ export const DependencyProvider = memo(({ children }: React.PropsWithChildren<un
                     if (!installed) {
                         return true;
                     }
-                    return versionGt(version, installed);
+                    return isDependencyOutdated(version, installed);
                 })
         ).length;
     }, [packages, installedPyPi]);

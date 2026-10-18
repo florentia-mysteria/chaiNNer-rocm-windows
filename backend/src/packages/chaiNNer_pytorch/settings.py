@@ -156,7 +156,7 @@ class PyTorchSettings:
 # claim BF16 support but fail at inference with "expected scalar type Float but
 # found BFloat16", because they build masks/biases in float32 at run time. Only
 # architectures that were actually run in BF16 on tile sizes other than their
-# training size are listed here. DAT needs the mask fix in spandrel_patches.
+# training size are listed here. DAT needs the mask fix in spandrel-rocm.
 BF16_VERIFIED_ARCHITECTURES = frozenset({"DAT"})
 
 
