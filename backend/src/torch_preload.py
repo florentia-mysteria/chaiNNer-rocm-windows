@@ -45,7 +45,11 @@ def preload_rocm_torch() -> None:
             os.environ.setdefault("TORCH_BLAS_PREFER_HIPBLASLT", "1")
             os.environ.setdefault("MIOPEN_USER_DB_PATH", str(db))
             os.environ.setdefault("MIOPEN_CUSTOM_CACHE_DIR", str(db))
-            os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
+            # FAST picks convolution kernels by heuristics without a workspace,
+            # which rules out the fastest 3x3 kernels on RDNA4 (ESRGAN runs ~28%
+            # slower). NORMAL measures a few candidates once per new shape and
+            # stores the winner in the user database above.
+            os.environ.setdefault("MIOPEN_FIND_MODE", "NORMAL")
 
         # The ROCm runtime on Windows keeps freed allocations in its own cache,
         # sized at 1/8 of VRAM by default (2 GB on a 16 GB card). PyTorch's
