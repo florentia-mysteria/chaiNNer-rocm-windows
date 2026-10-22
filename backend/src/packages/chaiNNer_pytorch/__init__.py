@@ -9,6 +9,9 @@ from system import is_arm_mac
 # AMD's ROCm wheels for Windows. See
 # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html
 ROCM_INDEX_URL = "https://stable.repo.amd.com/rocm/whl-next/"
+# spandrel with HIP kernels for ROCm, see https://github.com/florentia-mysteria/spandrel-rocm.
+# It runs the original code on any other GPU or CPU.
+SPANDREL_ROCM_INDEX_URL = "https://florentia-mysteria.github.io/spandrel-rocm/simple/"
 ROCM_SUFFIX = "+rocm10.0.0"
 ROCM_TORCH_VERSION = "2.12.0"
 ROCM_TORCHVISION_VERSION = "0.27.0"
@@ -144,8 +147,9 @@ package = add_package(
         Dependency(
             display_name="Spandrel",
             pypi_name="spandrel",
-            version="0.4.1",
-            size_estimate=264 * KB,
+            version="0.4.2+rocm",
+            size_estimate=320 * KB,
+            extra_index_url=SPANDREL_ROCM_INDEX_URL,
         ),
         Dependency(
             display_name="Spandrel extra architectures",
