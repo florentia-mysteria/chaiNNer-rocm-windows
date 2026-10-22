@@ -50,6 +50,11 @@ def preload_rocm_torch() -> None:
             # slower). NORMAL measures a few candidates once per new shape and
             # stores the winner in the user database above.
             os.environ.setdefault("MIOPEN_FIND_MODE", "NORMAL")
+            # Some PyTorch builds for MIOpen >= 3.5 switch convolutions to NHWC by
+            # default, where MIOpen has no Winograd kernels: ESRGAN-like models
+            # then run 1.6x (gfx12) to 40x (gfx11) slower. Keep NCHW.
+            # https://github.com/ROCm/TheRock/issues/2485
+            os.environ.setdefault("PYTORCH_MIOPEN_SUGGEST_NHWC", "0")
 
         # The ROCm runtime on Windows keeps freed allocations in its own cache,
         # sized at 1/8 of VRAM by default (2 GB on a 16 GB card). PyTorch's
