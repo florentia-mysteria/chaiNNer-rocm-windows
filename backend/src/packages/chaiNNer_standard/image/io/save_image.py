@@ -6,7 +6,6 @@ from typing import Literal
 
 import cv2
 import numpy as np
-import pillow_avif  # type: ignore # noqa: F401
 from PIL import Image
 
 from api import KeyInfo, Lazy, NodeContext

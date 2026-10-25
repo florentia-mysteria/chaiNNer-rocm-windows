@@ -7,7 +7,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pillow_avif  # type: ignore # noqa: F401
 from PIL import Image
 
 from logger import logger
