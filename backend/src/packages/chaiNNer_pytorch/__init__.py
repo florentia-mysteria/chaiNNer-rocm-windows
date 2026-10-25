@@ -147,7 +147,7 @@ package = add_package(
         Dependency(
             display_name="Spandrel",
             pypi_name="spandrel",
-            version="0.4.2+rocm",
+            version="0.4.2+rocm.2",
             size_estimate=320 * KB,
             extra_index_url=SPANDREL_ROCM_INDEX_URL,
         ),
