@@ -8,7 +8,7 @@ import numpy as np
 from api import Progress
 from logger import logger
 
-from ...utils.utils import Region, Size, get_h_w_c
+from ...utils.utils import Padding, Region, Size, get_h_w_c
 from .exact_split import exact_split
 from .tile_blending import BlendDirection, TileBlender, TileOverlap, half_sin_blend_fn
 from .tiler import Tiler
@@ -18,7 +18,24 @@ class Split:
     pass
 
 
-SplitImageOp = Callable[[np.ndarray, Region], np.ndarray | Split]
+class PendingResult:
+    """
+    An upscale result that is still being computed, e.g. on a GPU. Returning
+    one lets the next tile start before this one is copied back and blended.
+    """
+
+    def __init__(self, wait: Callable[[], np.ndarray]) -> None:
+        self._wait = wait
+
+    def result(self) -> np.ndarray:
+        return self._wait()
+
+
+SplitImageOp = Callable[[np.ndarray, Region], np.ndarray | Split | PendingResult]
+
+
+def _resolve(r: np.ndarray | Split | PendingResult) -> np.ndarray | Split:
+    return r.result() if isinstance(r, PendingResult) else r
 
 
 def auto_split(
@@ -78,7 +95,7 @@ def _exact_split(
     )
 
     def no_split_upscale(i: np.ndarray, r: Region) -> np.ndarray:
-        result = upscale(i, r)
+        result = _resolve(upscale(i, r))
         if isinstance(result, Split):
             raise _SplitEx
         return result
@@ -130,7 +147,7 @@ def _max_split(
 
     if w <= max_tile_size[0] and h <= max_tile_size[1]:
         # the image might be small enough so that we don't have to split at all
-        upscale_result = upscale(img, img_region)
+        upscale_result = _resolve(upscale(img, img_region))
         if not isinstance(upscale_result, Split):
             if progress is not None:
                 progress.set_progress(1.0)
@@ -188,36 +205,21 @@ def _max_split(
 
             row_result: TileBlender | None = None
             row_overlap: TileOverlap | None = None
+            # The previous tile of this row, blended only after the next one has
+            # been started, so the GPU is not idle while the CPU blends.
+            pending: tuple[np.ndarray | PendingResult, Region, Padding] | None = None
 
-            for x in range(tile_count_x):
-                tile = Region(
-                    x * tile_size_x, y * tile_size_y, tile_size_x, tile_size_y
-                ).intersect(img_region)
-                pad = img_region.child_padding(tile).min(overlap)
-                padded_tile = tile.add_padding(pad)
-
-                upscale_result = upscale(padded_tile.read_from(img), padded_tile)
-
-                if isinstance(upscale_result, Split):
-                    max_tile_size = split_tile_size(max_tile_size)
-
-                    new_tile_count_y = math.ceil(h / max_tile_size[1])
-                    new_tile_size_y = math.ceil(h / new_tile_count_y)
-                    start_y = (y * tile_size_x) // new_tile_size_y
-
-                    logger.debug(
-                        "Split occurred. New tile size is %s. Starting at row %d.",
-                        max_tile_size,
-                        start_y,
-                    )
-
-                    # reset result
-                    if result is not None:
-                        # we already added at least one row, so we have to set the offset back
-                        result.offset = start_y * new_tile_size_y
-
-                    restart = True
-                    break
+            def add_to_row(
+                entry: tuple[np.ndarray | PendingResult, Region, Padding],
+            ) -> None:
+                nonlocal row_result, row_overlap, prev_row_result
+                nonlocal scale, out_channels, tiles_processed
+                tile_result, padded_tile, pad = entry
+                upscale_result = (
+                    tile_result.result()
+                    if isinstance(tile_result, PendingResult)
+                    else tile_result
+                )
 
                 # figure out by how much the image was upscaled by
                 up_h, up_w, up_c = get_h_w_c(upscale_result)
@@ -253,8 +255,48 @@ def _max_split(
                 if progress is not None:
                     progress.set_progress(tiles_processed / total_tiles)
 
+            for x in range(tile_count_x):
+                tile = Region(
+                    x * tile_size_x, y * tile_size_y, tile_size_x, tile_size_y
+                ).intersect(img_region)
+                pad = img_region.child_padding(tile).min(overlap)
+                padded_tile = tile.add_padding(pad)
+
+                upscale_result = upscale(padded_tile.read_from(img), padded_tile)
+
+                if isinstance(upscale_result, Split):
+                    # this row is redone with smaller tiles
+                    pending = None
+
+                    max_tile_size = split_tile_size(max_tile_size)
+
+                    new_tile_count_y = math.ceil(h / max_tile_size[1])
+                    new_tile_size_y = math.ceil(h / new_tile_count_y)
+                    start_y = (y * tile_size_x) // new_tile_size_y
+
+                    logger.debug(
+                        "Split occurred. New tile size is %s. Starting at row %d.",
+                        max_tile_size,
+                        start_y,
+                    )
+
+                    # reset result
+                    if result is not None:
+                        # we already added at least one row, so we have to set the offset back
+                        result.offset = start_y * new_tile_size_y
+
+                    restart = True
+                    break
+
+                if pending is not None:
+                    add_to_row(pending)
+                pending = (upscale_result, padded_tile, pad)
+
             if restart:
                 break
+
+            if pending is not None:
+                add_to_row(pending)
 
             assert row_result is not None
             assert row_overlap is not None

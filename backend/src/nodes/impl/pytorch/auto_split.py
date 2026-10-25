@@ -9,7 +9,7 @@ from spandrel import ImageModelDescriptor
 
 from api import Progress
 
-from ..upscale.auto_split import Split, Tiler, auto_split
+from ..upscale.auto_split import PendingResult, Split, Tiler, auto_split
 from .utils import safe_cuda_cache_empty
 
 
@@ -87,6 +87,14 @@ def _pad(
 def _into_tensor(
     img: np.ndarray, device: torch.device, dtype: torch.dtype
 ) -> torch.Tensor:
+    if device.type == "cuda":
+        # A copy from pageable memory waits for all queued GPU work, which would
+        # stall the tile pipeline, and the dtype conversion would run on the CPU.
+        # Stage in pinned memory, copy asynchronously and convert on the GPU.
+        host = torch.empty(img.shape, dtype=torch.float32, pin_memory=True)
+        host.numpy()[...] = img
+        return host.to(device, non_blocking=True).to(dtype)
+
     img = np.ascontiguousarray(img)
     writeable = img.flags.writeable
     try:
@@ -103,6 +111,29 @@ def _into_tensor(
         return input_tensor
     finally:
         img.flags.writeable = writeable
+
+
+def _copy_to_host_async(
+    t: torch.Tensor, remove_padding: Callable[[np.ndarray], np.ndarray]
+) -> PendingResult:
+    """
+    Starts copying a GPU result into pinned host memory and returns without
+    waiting for it, so the next tile can be queued while this one is still being
+    computed and the CPU blends the previous one. The fp16/bf16 -> fp32
+    conversion happens on the GPU; the values are the same as converting on the
+    CPU.
+    """
+    t = t.detach().float().contiguous()
+    host = torch.empty(t.shape, dtype=torch.float32, pin_memory=True)
+    host.copy_(t, non_blocking=True)
+    done = torch.cuda.Event()
+    done.record()
+
+    def wait() -> np.ndarray:
+        done.synchronize()
+        return remove_padding(host.numpy())
+
+    return PendingResult(wait)
 
 
 @torch.inference_mode()
@@ -142,6 +173,10 @@ def pytorch_auto_split(
             # convert back to numpy
             output_tensor = _into_standard_image_form(output_tensor)
             output_tensor = _rgb_to_bgr(output_tensor)
+
+            if output_tensor.is_cuda:
+                return _copy_to_host_async(output_tensor, remove_padding)
+
             result = output_tensor.detach().cpu().detach().float().numpy()
 
             # Remove padding from output
