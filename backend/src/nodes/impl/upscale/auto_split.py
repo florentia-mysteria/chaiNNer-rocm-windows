@@ -118,6 +118,51 @@ def _exact_split(
     raise ValueError(f"Aborting after {MAX_ITER} splits. Unable to upscale image.")
 
 
+_AxisTile = tuple[int, int, int, int]
+"""(core start, core length, padding before, padding after) along one axis."""
+
+
+def _axis_layout(length: int, count: int, overlap: int) -> list[_AxisTile]:
+    """
+    Splits one axis into `count` tiles whose padded windows (core plus overlap)
+    all have the same size. The first and last tile get a core larger by
+    `overlap` instead of padding on the image border, so the amount of pixels
+    upscaled stays the same as with equal cores, and every tile of an image has
+    the same input size. That matters for GPU backends that prepare kernels per
+    input size (MIOpen spends ~70 ms per new convolution shape).
+    """
+    if count <= 1:
+        return [(0, length, 0, 0)]
+    size = min(length, -(-(length - 2 * overlap) // count) + 2 * overlap)
+    starts = [
+        (i * (length - size) + (count - 1) // 2) // (count - 1) for i in range(count)
+    ]
+    bounds = [0]
+    bounds += [(starts[i + 1] + starts[i] + size) // 2 for i in range(count - 1)]
+    bounds.append(length)
+    layout = [
+        (
+            bounds[i],
+            bounds[i + 1] - bounds[i],
+            bounds[i] - starts[i],
+            starts[i] + size - bounds[i + 1],
+        )
+        for i in range(count)
+    ]
+    if all(
+        core > 0 and before >= 0 and after >= 0 for _, core, before, after in layout
+    ):
+        return layout
+
+    # too small for the above: equal cores, padding clipped at the border
+    tile_size = math.ceil(length / count)
+    layout = []
+    for i in range(count):
+        a, b = i * tile_size, min((i + 1) * tile_size, length)
+        layout.append((a, b - a, min(overlap, a), min(overlap, length - b)))
+    return layout
+
+
 def _max_split(
     img: np.ndarray,
     upscale: SplitImageOp,
@@ -186,6 +231,8 @@ def _max_split(
         tile_count_y = math.ceil(h / max_tile_size[1])
         tile_size_x = math.ceil(w / tile_count_x)
         tile_size_y = math.ceil(h / tile_count_y)
+        columns = _axis_layout(w, tile_count_x, overlap)
+        rows = _axis_layout(h, tile_count_y, overlap)
         total_tiles = tile_count_x * tile_count_y
 
         logger.debug(
@@ -211,6 +258,7 @@ def _max_split(
 
             def add_to_row(
                 entry: tuple[np.ndarray | PendingResult, Region, Padding],
+                total_tiles: int = total_tiles,
             ) -> None:
                 nonlocal row_result, row_overlap, prev_row_result
                 nonlocal scale, out_channels, tiles_processed
@@ -255,11 +303,10 @@ def _max_split(
                 if progress is not None:
                     progress.set_progress(tiles_processed / total_tiles)
 
-            for x in range(tile_count_x):
-                tile = Region(
-                    x * tile_size_x, y * tile_size_y, tile_size_x, tile_size_y
-                ).intersect(img_region)
-                pad = img_region.child_padding(tile).min(overlap)
+            row_y, row_h, pad_top, pad_bottom = rows[y]
+            for col_x, col_w, pad_left, pad_right in columns:
+                tile = Region(col_x, row_y, col_w, row_h)
+                pad = Padding(pad_top, pad_right, pad_bottom, pad_left)
                 padded_tile = tile.add_padding(pad)
 
                 upscale_result = upscale(padded_tile.read_from(img), padded_tile)
@@ -270,9 +317,12 @@ def _max_split(
 
                     max_tile_size = split_tile_size(max_tile_size)
 
-                    new_tile_count_y = math.ceil(h / max_tile_size[1])
-                    new_tile_size_y = math.ceil(h / new_tile_count_y)
-                    start_y = (y * tile_size_x) // new_tile_size_y
+                    new_rows = _axis_layout(h, math.ceil(h / max_tile_size[1]), overlap)
+                    # the last new row starting at or before this row; the rows
+                    # above are done and stay
+                    start_y = max(
+                        i for i, new_row in enumerate(new_rows) if new_row[0] <= row_y
+                    )
 
                     logger.debug(
                         "Split occurred. New tile size is %s. Starting at row %d.",
@@ -282,8 +332,9 @@ def _max_split(
 
                     # reset result
                     if result is not None:
-                        # we already added at least one row, so we have to set the offset back
-                        result.offset = start_y * new_tile_size_y
+                        # we already added at least one row, so we have to set the offset
+                        # back (in output pixels)
+                        result.offset = new_rows[start_y][0] * scale
 
                     restart = True
                     break
