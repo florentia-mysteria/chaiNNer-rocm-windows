@@ -198,7 +198,9 @@ def get_settings(context: NodeContext) -> PyTorchSettings:
 
     return PyTorchSettings(
         use_cpu=settings.get_bool("use_cpu", False),
-        use_fp16=settings.get_bool("use_fp16", False),
+        # the toggle's own default: until the settings are saved, the frontend
+        # sends none, and False would silently run every model in fp32
+        use_fp16=settings.get_bool("use_fp16", should_fp16),
         gpu_index=settings.get_int("gpu_index", 0, parse_str=True),
         budget_limit=settings.get_int("budget_limit", 0, parse_str=True),
         force_cache_wipe=settings.get_bool("force_cache_wipe", False),
