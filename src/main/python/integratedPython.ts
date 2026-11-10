@@ -122,7 +122,9 @@ export const getIntegratedPython = async (
     if (platform === 'linux' || platform === 'darwin') {
         log.info('Granting permissions for integrated python...');
         try {
-            await fs.chmod(pythonPath, 0o7777);
+            // rwxr-xr-x: executable for everyone, writable only by the owner.
+            // (0o7777 set setuid/setgid and made the interpreter world-writable.)
+            await fs.chmod(pythonPath, 0o755);
         } catch (error) {
             log.warn(error);
         }
